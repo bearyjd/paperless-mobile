@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:bloc/bloc.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:equatable/equatable.dart';
 
 part 'ai_chat_state.dart';
@@ -14,18 +16,26 @@ class AiChatCubit extends Cubit<AiChatState> {
   AiChatCubit({
     required this.serverUrl,
     required this.apiKey,
-  })  : _dio = Dio(BaseOptions(
-          baseUrl: serverUrl.endsWith('/') ? serverUrl : '$serverUrl/',
-          headers: {
-            'Content-Type': 'application/json',
-            if (apiKey.isNotEmpty) 'x-api-key': apiKey,
-          },
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 120),
-          followRedirects: true,
-          maxRedirects: 5,
-        )),
+  })  : _dio = _createDio(serverUrl, apiKey),
         super(const AiChatState());
+
+  static Dio _createDio(String serverUrl, String apiKey) {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl.endsWith('/') ? serverUrl : '$serverUrl/',
+      headers: {
+        'Content-Type': 'application/json',
+        if (apiKey.isNotEmpty) 'x-api-key': apiKey,
+      },
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 120),
+      followRedirects: true,
+      maxRedirects: 5,
+    ));
+    // Accept self-signed certificates (matches main app behavior)
+    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient =
+        () => HttpClient()..badCertificateCallback = (cert, host, port) => true;
+    return dio;
+  }
 
   /// Sends a chat message using Paperless-AI's RAG ask endpoint.
   Future<void> sendMessage(String message) async {
@@ -147,6 +157,8 @@ class AiChatCubit extends Cubit<AiChatState> {
         followRedirects: true,
         maxRedirects: 5,
       ));
+      (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient =
+          () => HttpClient()..badCertificateCallback = (cert, host, port) => true;
       // Try the health endpoint first, fall back to RAG status
       try {
         final response = await dio.get('health');
