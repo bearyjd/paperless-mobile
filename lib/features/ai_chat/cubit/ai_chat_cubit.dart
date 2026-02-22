@@ -18,6 +18,7 @@ class AiChatCubit extends Cubit<AiChatState> {
           baseUrl: serverUrl.endsWith('/') ? serverUrl : '$serverUrl/',
           headers: {
             'Content-Type': 'application/json',
+            if (apiKey.isNotEmpty) 'x-api-key': apiKey,
           },
           connectTimeout: const Duration(seconds: 30),
           receiveTimeout: const Duration(seconds: 120),
@@ -26,8 +27,7 @@ class AiChatCubit extends Cubit<AiChatState> {
         )),
         super(const AiChatState());
 
-  /// Sends a chat message using Paperless-AI's RAG query endpoint.
-  /// Falls back to /chat/message if /api/rag/query is unavailable.
+  /// Sends a chat message using Paperless-AI's RAG ask endpoint.
   Future<void> sendMessage(String message) async {
     final userMessage = ChatMessage(role: 'user', content: message);
     emit(state.copyWith(
@@ -37,8 +37,8 @@ class AiChatCubit extends Cubit<AiChatState> {
 
     try {
       final response = await _dio.post(
-        'api/rag/query',
-        data: jsonEncode({'query': message}),
+        'api/rag/ask',
+        data: jsonEncode({'question': message}),
       );
 
       final data = response.data;
@@ -46,20 +46,20 @@ class AiChatCubit extends Cubit<AiChatState> {
       List<DocumentReference> references = [];
 
       if (data is Map) {
-        // RAG query response format: {answer, sources, model}
-        content = data['answer'] ??
+        // RAG ask response format: {context, sources, query}
+        content = data['context'] ??
+            data['answer'] ??
             data['response'] ??
-            data['message'] ??
             data.toString();
 
         // Parse source documents from RAG response
-        final sources = data['sources'] ?? data['references'];
+        final sources = data['sources'];
         if (sources is List) {
           references = sources
               .map((r) {
                 if (r is Map) {
                   return DocumentReference(
-                    id: r['document_id'] ?? r['id'] ?? 0,
+                    id: r['doc_id'] ?? r['document_id'] ?? r['id'] ?? 0,
                     title: r['title'] ?? r['document_title'] ?? '',
                   );
                 }
@@ -97,15 +97,15 @@ class AiChatCubit extends Cubit<AiChatState> {
   Future<List<Map<String, dynamic>>> semanticSearch(String query) async {
     try {
       final response = await _dio.post(
-        'api/rag/query',
+        'api/rag/search',
         data: jsonEncode({'query': query}),
       );
       final data = response.data;
-      if (data is Map && data['sources'] != null) {
-        return (data['sources'] as List).cast<Map<String, dynamic>>();
-      }
       if (data is List) {
         return data.cast<Map<String, dynamic>>();
+      }
+      if (data is Map && data['sources'] != null) {
+        return (data['sources'] as List).cast<Map<String, dynamic>>();
       }
       return [];
     } catch (_) {
@@ -113,15 +113,22 @@ class AiChatCubit extends Cubit<AiChatState> {
     }
   }
 
+  // Note: Paperless-AI does not expose a classification API endpoint.
+  // Classification happens internally via its cron-based document scanning.
+  // This uses the RAG ask endpoint as a workaround to suggest classifications.
   Future<Map<String, dynamic>?> autoClassify(int documentId) async {
     try {
       final response = await _dio.post(
-        'api/classify/',
-        data: jsonEncode({'document_id': documentId}),
+        'api/rag/ask',
+        data: jsonEncode({
+          'question':
+              'What document type, correspondent, and tags would you suggest for document ID $documentId?',
+        }),
       );
-      return response.data is Map
-          ? response.data as Map<String, dynamic>
-          : null;
+      if (response.data is Map) {
+        return response.data as Map<String, dynamic>;
+      }
+      return null;
     } catch (_) {
       return null;
     }
@@ -132,14 +139,22 @@ class AiChatCubit extends Cubit<AiChatState> {
       final baseUrl = serverUrl.endsWith('/') ? serverUrl : '$serverUrl/';
       final dio = Dio(BaseOptions(
         baseUrl: baseUrl,
+        headers: {
+          if (apiKey.isNotEmpty) 'x-api-key': apiKey,
+        },
         connectTimeout: const Duration(seconds: 10),
         receiveTimeout: const Duration(seconds: 10),
         followRedirects: true,
         maxRedirects: 5,
       ));
-      // Try the status endpoint (Node.js port 3000)
-      final response = await dio.get('status');
-      return response.statusCode == 200;
+      // Try the health endpoint first, fall back to RAG status
+      try {
+        final response = await dio.get('health');
+        return response.statusCode == 200;
+      } catch (_) {
+        final response = await dio.get('api/rag/status');
+        return response.statusCode == 200;
+      }
     } catch (_) {
       return false;
     }
