@@ -5,6 +5,7 @@ import 'package:bloc/bloc.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 
 part 'ai_chat_state.dart';
 
@@ -46,19 +47,21 @@ class AiChatCubit extends Cubit<AiChatState> {
     ));
 
     try {
+      debugPrint('[AiChat] POST ${_dio.options.baseUrl}api/rag/ask');
+      debugPrint('[AiChat] Headers: ${_dio.options.headers}');
       final response = await _dio.post(
         'api/rag/ask',
-        data: jsonEncode({'question': message}),
+        data: jsonEncode({'question': message, 'useAI': true}),
       );
+      debugPrint('[AiChat] Response ${response.statusCode}: ${response.data}');
 
       final data = response.data;
       String content;
       List<DocumentReference> references = [];
 
       if (data is Map) {
-        // RAG ask response format: {context, sources, query}
-        content = data['context'] ??
-            data['answer'] ??
+        // RAG ask response format: {answer, sources, model}
+        content = data['answer'] ??
             data['response'] ??
             data.toString();
 
@@ -69,8 +72,8 @@ class AiChatCubit extends Cubit<AiChatState> {
               .map((r) {
                 if (r is Map) {
                   return DocumentReference(
-                    id: r['doc_id'] ?? r['document_id'] ?? r['id'] ?? 0,
-                    title: r['title'] ?? r['document_title'] ?? '',
+                    id: r['doc_id'] ?? r['id'] ?? 0,
+                    title: r['title'] ?? '',
                   );
                 }
                 return null;
@@ -92,7 +95,14 @@ class AiChatCubit extends Cubit<AiChatState> {
         messages: [...state.messages, assistantMessage],
         isLoading: false,
       ));
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[AiChat] sendMessage error: $e');
+      if (e is DioException) {
+        debugPrint('[AiChat] DioException type: ${e.type}');
+        debugPrint('[AiChat] DioException response: ${e.response?.statusCode} ${e.response?.data}');
+        debugPrint('[AiChat] DioException message: ${e.message}');
+      }
+      debugPrint('[AiChat] Stack: $stackTrace');
       final errorMessage = ChatMessage(
         role: 'assistant',
         content: 'Error: ${e.toString()}',
@@ -118,7 +128,11 @@ class AiChatCubit extends Cubit<AiChatState> {
         return (data['sources'] as List).cast<Map<String, dynamic>>();
       }
       return [];
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[AiChat] semanticSearch error: $e');
+      if (e is DioException) {
+        debugPrint('[AiChat] DioException: ${e.type} ${e.response?.statusCode} ${e.response?.data}');
+      }
       return [];
     }
   }
@@ -133,13 +147,18 @@ class AiChatCubit extends Cubit<AiChatState> {
         data: jsonEncode({
           'question':
               'What document type, correspondent, and tags would you suggest for document ID $documentId?',
+          'useAI': true,
         }),
       );
       if (response.data is Map) {
         return response.data as Map<String, dynamic>;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[AiChat] autoClassify error: $e');
+      if (e is DioException) {
+        debugPrint('[AiChat] DioException: ${e.type} ${e.response?.statusCode} ${e.response?.data}');
+      }
       return null;
     }
   }
